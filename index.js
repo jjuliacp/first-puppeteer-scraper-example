@@ -1,53 +1,76 @@
+import fs from "fs/promises";
 import puppeteer from "puppeteer";
 
-// TODO: Now it's your turn to improve the scraper and make him get more data from the Quotes to Scrape website.
-// Here's a list of potential improvements you can make:
-// - Navigate between all pages using the "Next" button and fetch the quotes on all the pages
-// - Fetch the quote's tags (each quote has a list of tags)
-// - Scrape the author's about page (by clicking on the author's name on each quote)
-// - Categorize the quotes by tags or authors (it's not 100% related to the scraping itself, but that can be a good improvement)
+//* extraer items de la pagina
+function extractItems() {
+  const quotes = document.querySelectorAll(".quote");
+  return [...quotes].map((quote) => {
+    const text = quote.querySelector(".text").innerText;
+    const author = quote.querySelector(".author").innerText;
+    const tags = [...quote.querySelectorAll(".tag")].map(
+      (tag) => tag.innerText
+    );
+    return { text, author, tags };
+  });
+}
+
+async function scrapeItems(page, extractItems, itemCount, scrollDelay = 200) {
+  let items = [];
+  let previousHeight;
+  try {
+    while (items.length < itemCount) {
+      const newItems = await page.evaluate(extractItems);
+      items = [...items, ...newItems]; // extraer elementos de la pagina
+
+      //obtener altura de la pagina
+      let newHeight = await page.evaluate("document.body.scrollHeight");
+      if (newHeight === previousHeight) break;
+      previousHeight = newHeight;
+
+      //scroll hacia abajo
+      await page.evaluate("window.scrollTo(0, document.body.scrollHeight)");
+      // await page.waitForFunction(
+      //   `document.body.scrollHeight > ${previousHeight}`
+      // );
+      await page.waitForTimeout(scrollDelay);
+    }
+  } catch (e) {}
+  return items;
+}
+
+async function scrapeAllPages(page) {
+  let allItems = new Set();
+  while (true) {
+    console.log("scrapeando pagina para obtener todas los items ");
+    const items = await scrapeItems(page, extractItems, 100);
+    items.forEach((item) => allItems.add(JSON.stringify(item))); // Añadir sin duplicados
+    const nextBtn = await page.$(".pager > .next > a");
+    if (!nextBtn) break; // si no hay paginas se detiene
+    await nextBtn.click();
+
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  return Array.from(allItems).map(JSON.parse);
+}
 
 const getQuotes = async () => {
-  // Start a Puppeteer session with:
-  // - a visible browser (`headless: false` - easier to debug because you'll see the browser in action)
-  // - no default viewport (`defaultViewport: null` - website page will in full width and height)
   const browser = await puppeteer.launch({
     headless: false,
     defaultViewport: null,
   });
 
-  // Open a new page
   const page = await browser.newPage();
 
-  // On this new page:
-  // - open the "http://quotes.toscrape.com/" website
-  // - wait until the dom content is loaded (HTML is ready)
   await page.goto("http://quotes.toscrape.com/", {
     waitUntil: "domcontentloaded",
   });
 
-  // Get page data
-  const quotes = await page.evaluate(() => {
-    // Fetch the first element with class "quote"
-    // Get the displayed text and returns it
-    const quoteList = document.querySelectorAll(".quote");
-
-    // Convert the quoteList to an iterable array
-    // For each quote fetch the text and author
-    return Array.from(quoteList).map((quote) => {
-      // Get the sub-elements from the previously fetched quote element
-      const text = quote.querySelector(".text").innerText;
-      const author = quote.querySelector(".author").innerText;
-
-      return { text, author };
-    });
+  const items = await scrapeAllPages(page); //*obtener todas las paginas
+  fs.writeFile("quotes.json", JSON.stringify(items, null, 2), (err) => {
+    if (err) throw err;
+    console.log("File saved");
   });
-
-  // Display the quotes
-  console.log(quotes);
-
-  // Click on the "Next page" button
-  await page.click(".pager > .next > a");
+  console.log(items.length);
 
   // Close the browser
   await browser.close();
